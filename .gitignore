@@ -1,0 +1,13 @@
+# ビルド成果物
+*.app
+# macOS
+.DS_Store
+# 打鍵ログ（打った文章を再現できるため絶対に公開しない）
+*.log
+# 作業用
+*.bak
+
+# Python のキャッシュ
+__pycache__/
+_to_delete/
+_dev_private/
