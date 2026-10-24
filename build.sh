@@ -10,7 +10,7 @@ cd "$(dirname "$0")"
 APP_NAME="Rin"                       # 英字表記。アプリのファイル名・設定フォルダ名に使われる
 DISPLAY_NAME="凛"                    # 正式名称。メニューや画面の表示に使われる
 BUNDLE_ID="io.github.yuyaaaaaaaaa.rin"   # 他のアプリと重ならない逆ドメイン形式の識別子
-VERSION="0.10.0"                      # 公開時に 1.0.0 にする
+VERSION="1.0.0"                       # 版を上げるときはここを書き換える
 
 if ! command -v swiftc >/dev/null 2>&1; then
     echo "swiftc が見つかりません。ターミナルで  xcode-select --install  を実行してから、もう一度お試しください。"
