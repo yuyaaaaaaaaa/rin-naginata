@@ -33,6 +33,7 @@ struct JudgeParams {
     var rolloverGuardMs: Double = 12       // 誤和音ガード[ms]
     var editPairMs: Double = 60            // 編集モード: アンカー2キーの押下時刻差の上限[ms]
     var timerMarginMs: Double = 1          // 確定タイマーの余裕[ms]
+    var holdChord: Bool = true             // 押したままの相方: 和音のあとも押されたままのキーを、次の打鍵と組ませる
 }
 
 /// エンジンの判定結果
@@ -130,6 +131,10 @@ final class ChordEngine {
     /// 配列の和音: キー集合 → 各定義が「かな入力時のみ」か
     private(set) var combos: [Set<Int64>: [Bool]] = [:]
     private var triplePairs: Set<Set<Int64>> = []
+    /// 押したままの相方の対象: 2キーのかな和音（Spaceを含まない）
+    private var kanaPairs: Set<Set<Int64>> = []
+    /// 和音のあとも押されたままのキー（相方待ち）
+    private var linger: [Int64: KeyPress] = [:]
     /// 編集モードのキー集合（アプリ側の editActions と同じ順）
     var editChords: [Set<Int64>] = []
     /// かな入力中か（英数入力では「かな入力時のみ」の和音を使わず、Space+キーはShift扱い）
@@ -153,6 +158,8 @@ final class ChordEngine {
         combos = [:]
         for c in list { combos[c.keys, default: []].append(c.kanaOnly) }
         triplePairs = []
+        kanaPairs = []
+        for c in list where c.kanaOnly && c.keys.count == 2 && !c.keys.contains(space) { kanaPairs.insert(c.keys) }
         for (k, _) in combos where k.count == 3 {
             let a = k.sorted()
             triplePairs.insert([a[0], a[1]]); triplePairs.insert([a[0], a[2]]); triplePairs.insert([a[1], a[2]])
@@ -160,6 +167,7 @@ final class ChordEngine {
     }
     func reset() {
         buf.removeAll(); pressed.removeAll(); lastDown.removeAll(); out.removeAll(); nextDeadline = nil
+        linger.removeAll()
     }
     func isPressed(_ code: Int64) -> Bool { pressed.contains(code) }
 
@@ -189,6 +197,9 @@ final class ChordEngine {
         out = []
         fireTimers(until: t)
         pressed.remove(code)
+        if let L = linger[code], L.up == nil {
+            L.up = t; resolve(t); schedule(t); return out
+        }
         guard let k = buf.last(where: { $0.code == code && $0.up == nil }) else { return out }
         k.up = t
         resolve(t); schedule(t)
@@ -274,7 +285,25 @@ final class ChordEngine {
             }
             if let b = partner {
                 out.append(.chord([h.code, b.code])); consume(h); consume(b)
+                holdAfter([h.code, b.code], h, b)
                 continue
+            }
+
+            // (2b) 和音のあとも押されたままのキーと組む（例: J を押したまま F,F → がが / J を押したまま E → で）
+            if judge.p.holdChord {
+                var hit: KeyPress? = nil
+                for L in linger.values.sorted(by: { $0.down < $1.down }) {
+                    if L.down >= h.down { continue }
+                    let pair: Set<Int64> = [L.code, h.code]
+                    if !kanaPairs.contains(pair) || !kanaMode { continue }
+                    guard let v = judge.judge(L, h, now) else { return }
+                    if v { hit = L; break }
+                }
+                if let L = hit {
+                    out.append(.chord([L.code, h.code])); h.done = true
+                    holdAfter([L.code, h.code], L, h)
+                    continue
+                }
             }
 
             // (3) 組める相手がいない
@@ -285,14 +314,35 @@ final class ChordEngine {
             h.done = true
         }
     }
+    /// 2キーのかな和音のあと、まだ押されているキーを「相方待ち」として残す
+    private func holdAfter(_ pair: Set<Int64>, _ a: KeyPress, _ b: KeyPress) {
+        guard judge.p.holdChord, kanaPairs.contains(pair) else { return }
+        for k in [a, b] where k.up == nil && pressed.contains(k.code) { linger[k.code] = k }
+    }
+    /// 離された相方待ちのキーは、その押下中に押されたキーの判定が済んだら外す
+    private func gcLinger() {
+        let live = buf.filter { !$0.done }
+        for (c, L) in linger {
+            if let lu = L.up, !live.contains(where: { $0.down > L.down && $0.down < lu }) { linger[c] = nil }
+        }
+    }
     private func consume(_ k: KeyPress) {
         if k.code == space && k.up == nil && pressed.contains(space) { k.shift = true }   // 連続シフト
         else { k.done = true }
     }
     private func schedule(_ now: UInt64) {
+        gcLinger()
         var best: UInt64? = nil
         let live = buf.filter { !$0.done }
         let margin = UInt64(judge.p.timerMarginMs * NS_PER_MS)
+        for L in linger.values {
+            for b in live where b.down > L.down {
+                for t in judge.boundaries(L, b) {
+                    let tt = t + margin
+                    if tt > now && (best == nil || tt < best!) { best = tt }
+                }
+            }
+        }
         for i in 0..<live.count {
             for j in (i + 1)..<max(i + 1, live.count) {
                 for t in judge.boundaries(live[i], live[j]) {

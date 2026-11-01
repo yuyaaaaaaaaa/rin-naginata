@@ -17,7 +17,7 @@ def audit(Eng, ev):
     for t,k in presses: used[k].append(t)
     ptr=collections.defaultdict(int); order=[]; dup=0
     for t,tok in out:
-        ks=[tok[1]] if tok[0]=='single' else list(tok[1])
+        ks=[tok[1]] if tok[0]=='single' else [k for k in tok[1] if not (len(tok)>2 and k==tok[2])]   # 押したままの相方は数えない
         firsts=[]
         for k in ks:
             if k==SPACE: continue
@@ -48,7 +48,7 @@ if len(sys.argv)>2:
                 if kind=='DN': presses[k].append(t)
             ptr=collections.defaultdict(int); prev=None
             for t,tok in out:
-                ks=[tok[1]] if tok[0]=='single' else list(tok[1])
+                ks=[tok[1]] if tok[0]=='single' else [k for k in tok[1] if not (len(tok)>2 and k==tok[2])]   # 押したままの相方は数えない
                 f=[]
                 for k in ks:
                     if k==SPACE: continue

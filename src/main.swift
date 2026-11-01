@@ -25,7 +25,7 @@ import UniformTypeIdentifiers
 let APP_NAME = (Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String) ?? "Rin"
 let DISPLAY_NAME = (Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String) ?? APP_NAME
 let APP_VERSION = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "?"
-let ENGINE_VERSION = "2.0"
+let ENGINE_VERSION = "2.1"
 
 // ==== 調整パラメータ（設定画面から変更可・UserDefaultsに保存） =================
 var THUMB_RATIO: Double = 0.60            // 親指が先（Space→文字）の重なり割合
@@ -38,6 +38,7 @@ var CHAR_SHORTER_NEST_CAP_MS: Double = 200 //  〃 上限超（完全内包型�
 var THUMB_OVERLAP_OK_MS: Double = 25      // Space先行の絶対重なり救済[ms]（0で無効）
 var ROLLOVER_GUARD_MS: Double = 12        // 誤和音ガード[ms]
 var EDIT_PAIR_MS: Double = 60             // 編集モード: アンカー同時押し判定[ms]
+var HOLD_CHORD = true                     // 押したままの相方（J を押したまま F,F → がが）。UserDefaults の holdChord
 let DEN_SHORTER = false
 
 struct Param {
@@ -60,6 +61,7 @@ let params: [Param] = [
 func loadPrefs() {
     let ud = UserDefaults.standard
     for p in params where ud.object(forKey: p.key) != nil { p.set(ud.double(forKey: p.key)) }
+    if ud.object(forKey: "holdChord") != nil { HOLD_CHORD = ud.bool(forKey: "holdChord") }
 }
 
 // ==== パス ====================================================================
@@ -710,6 +712,7 @@ func setLogging(_ on: Bool) {
         logFH?.seekToEndOfFile()
         logEnabled = true
         dbg("=== ログ記録開始 \(APP_NAME) \(ENGINE_VERSION) (\(Date())) ===")
+        dbg("# 押したままの相方: \(HOLD_CHORD ? "オン" : "オフ")")
     } else {
         dbg("=== ログ記録停止 ===")
         logEnabled = false
@@ -734,6 +737,7 @@ func currentJudgeParams() -> JudgeParams {
     p.shorterLo = CHAR_SHORTER_LO; p.shorterHi = CHAR_SHORTER_HI; p.shorterMinOvMs = CHAR_SHORTER_MIN_OV_MS
     p.shorterNestCapMs = CHAR_SHORTER_NEST_CAP_MS; p.thumbOverlapOkMs = THUMB_OVERLAP_OK_MS
     p.rolloverGuardMs = ROLLOVER_GUARD_MS; p.editPairMs = EDIT_PAIR_MS
+    p.holdChord = HOLD_CHORD
     return p
 }
 func syncEngineParams() { engine.params = currentJudgeParams() }
@@ -1651,6 +1655,10 @@ final class SettingsWindowController: NSWindowController {
         }
         let reset = NSButton(title: "初期値に戻す（実測チューニング値）", target: self, action: #selector(resetDefaults))
         stack.addArrangedSubview(reset)
+        let hold = NSButton(checkboxWithTitle: "押したままのキーで続けて同時押しする（J を押したまま F, F →「がが」）",
+                            target: self, action: #selector(holdChordChanged(_:)))
+        hold.state = HOLD_CHORD ? .on : .off
+        stack.addArrangedSubview(hold)
 
         stack.addArrangedSubview(NSBox.separator(width: 520))
         section("配列")
@@ -1719,6 +1727,11 @@ final class SettingsWindowController: NSWindowController {
         p.set(s.doubleValue)
         UserDefaults.standard.set(s.doubleValue, forKey: p.key)
         valueLabels[key]?.stringValue = fmt(p, s.doubleValue)
+        syncEngineParams()
+    }
+    @objc func holdChordChanged(_ b: NSButton) {
+        HOLD_CHORD = (b.state == .on)
+        UserDefaults.standard.set(HOLD_CHORD, forKey: "holdChord")
         syncEngineParams()
     }
     @objc func resetDefaults() {

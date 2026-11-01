@@ -5,7 +5,7 @@
 from common import SPACE
 DEF=dict(THUMB_RATIO=0.60, CHAR_THEN_THUMB_RATIO=0.80, CHAR_RATIO=0.60, CHAR_SHORTER_LO=0.60, CHAR_SHORTER_HI=0.90,
          CHAR_SHORTER_MIN_OV_MS=40, CHAR_SHORTER_NEST_CAP_MS=200, THUMB_OVERLAP_OK_MS=25, ROLLOVER_GUARD_MS=12,
-         EDIT_PAIR_MS=60, TIMER_MARGIN_MS=1)
+         EDIT_PAIR_MS=60, TIMER_MARGIN_MS=1, HOLD_CHORD=True)
 MS=1_000_000
 class Key:
     __slots__=('code','down','up','shift','done')
@@ -80,6 +80,9 @@ class NewEngine:
         s.triplePairs=set()
         for t in s.triples:
             a=sorted(t); s.triplePairs|={frozenset((a[0],a[1])),frozenset((a[0],a[2])),frozenset((a[1],a[2]))}
+        # 押したままの相方（連続同時押し）: 2キーのかな和音（Spaceを含まない）だけが対象
+        s.kanaPairs={k for k,tag,ko in rcombos if ko and len(k)==2 and SPACE not in k}
+        s.linger={}                     # code -> Key（和音のあとも押されたままのキー）
         s.buf=[]; s.pressed=set(); s.editHeld={}; s.lastDown={}; s.kana=True; s.deadline=None; s.out=[]
     def has_combo(s,keys):
         for ko in s.comboKeys.get(keys,[]):
@@ -136,19 +139,51 @@ class NewEngine:
                 chord=b; break
             if chord is not None:
                 s.emit(('chord',frozenset((h.code,chord.code))),now); s._consume(h); s._consume(chord)
+                s._hold_after(frozenset((h.code,chord.code)),(h,chord))
                 continue
+            # (2b) 和音のあとも押されたままのキーと組む（例: J を押したまま F,F → がが / J を押したまま E → で）
+            if s.p['HOLD_CHORD']:
+                hit=None
+                for L in sorted(s.linger.values(), key=lambda k: k.down):
+                    if L.down>=h.down: continue
+                    pair=frozenset((L.code,h.code))
+                    if pair not in s.kanaPairs or not s.kana: continue
+                    v=J.judge(L,h,now)
+                    if v is None: return
+                    if v: hit=L; break
+                if hit is not None:
+                    s.emit(('chord',frozenset((hit.code,h.code)),hit.code),now); h.done=True
+                    s._hold_after(frozenset((hit.code,h.code)),(hit,h))
+                    continue
             # (3) 組める相手がいない
             if h.up is None and not any(k.up is not None or J.judge(h,k,now) is not None for k in rest):
                 return                            # hは押下中で、まだ何も決まっていない→待つ
             if h.up is None and not rest: return
             if h.shift: h.done=True               # 連続シフトのSpaceは黙って退場
             else: s.emit(('single',h.code),now); h.done=True
+    def _hold_after(s,pair,keys):
+        """2キーのかな和音のあと、まだ押されているキーを「相方待ち」として残す"""
+        if not s.p['HOLD_CHORD'] or pair not in s.kanaPairs: return
+        for k in keys:
+            if k.up is None and k.code in s.pressed: s.linger[k.code]=k
+    def _gc(s):
+        """離された相方待ちのキーは、その押下中に押されたキーの判定が済んだら外す"""
+        live=[k for k in s.buf if not k.done]
+        for c,L in list(s.linger.items()):
+            if L.up is not None and not any(L.down<k.down<L.up for k in live): del s.linger[c]
     def _consume(s,k):
         if k.code==SPACE and k.up is None and SPACE in s.pressed: k.shift=True   # 連続シフト
         else: k.done=True
         if k.done and k.up is not None: pass
     def _schedule(s,now):
+        s._gc()
         best=None; live=[k for k in s.buf if not k.done]
+        for L in s.linger.values():
+            for b in live:
+                if b.down>L.down:
+                    for t in s.J.boundaries(L,b):
+                        t+=int(s.p['TIMER_MARGIN_MS']*MS)
+                        if t>now and (best is None or t<best): best=t
         for i,a in enumerate(live):
             for b in live[i+1:]:
                 for t in s.J.boundaries(a,b):
@@ -182,6 +217,9 @@ class NewEngine:
     def keyUp(s,code,t):
         s.fire_timers_until(t)
         s.pressed.discard(code)
+        L=s.linger.get(code)
+        if L is not None and L.up is None:
+            L.up=t; s.resolve(t); s._schedule(t); return
         c=[k for k in s.buf if k.code==code and k.up is None]
         if not c: return
         c[-1].up=t
